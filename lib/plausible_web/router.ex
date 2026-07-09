@@ -180,9 +180,8 @@ defmodule PlausibleWeb.Router do
     end
   end
 
-  # SSO routes
-  on_ee do
-    pipeline :sso_saml do
+  # SSO routes (SGC: un-gated from on_ee so SAML SSO is active in the CE build)
+  pipeline :sso_saml do
       plug :accepts, ["html"]
 
       plug PlausibleWeb.Plugs.SecureSSO
@@ -216,7 +215,7 @@ defmodule PlausibleWeb.Router do
       post "/consume/:integration_id", SSOController, :saml_consume
       post "/csp-report", SSOController, :csp_report
     end
-  end
+  # /SSO routes (SGC un-gate)
 
   scope path: "/api/plugins", as: :plugins_api do
     pipeline :plugins_api_auth do

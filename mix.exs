@@ -65,7 +65,22 @@ defmodule Plausible.MixProject do
   defp elixirc_paths(env) when env in [:ce_test, :ce_dev],
     do: ["lib", "test/support"]
 
-  defp elixirc_paths(:ce), do: ["lib"]
+  # SGC: compile ONLY the extra/ SSO subtree into the CE build (the rest of extra/,
+  # e.g. revenue goals, doesn't build in CE). Reuses the existing SSO modules;
+  # on_ee still gates runtime, so the SSO routes are un-gated separately in the router.
+  defp elixirc_paths(:ce),
+    do:
+      ["lib"] ++
+        ~w(extra/lib/plausible/auth/sso.ex
+           extra/lib/plausible/auth/sso
+           extra/lib/plausible/audit.ex
+           extra/lib/plausible/audit
+           extra/lib/plausible_web/sso
+           extra/lib/plausible_web/controllers/sso_controller.ex
+           extra/lib/plausible_web/plugs/secure_sso.ex
+           extra/lib/plausible_web/plugs/handle_expired_session.ex
+           extra/lib/plausible_web/views/sso_view.ex
+           extra/lib/plausible_web/templates/sso)
   defp elixirc_paths(_), do: ["lib", "extra/lib"]
 
   # Specifies your project dependencies.
