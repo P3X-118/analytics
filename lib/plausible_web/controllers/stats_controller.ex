@@ -45,6 +45,8 @@ defmodule PlausibleWeb.StatsController do
   alias Plausible.Billing.Feature.SharedLinks
 
   plug(PlausibleWeb.Plugs.AuthorizeSiteAccess when action in [:stats])
+  # SGC Model-B: scoped SSO users may only open their own site's dashboard.
+  plug(PlausibleWeb.Plugs.SgcScope, [mode: :site_access] when action in [:stats])
 
   def stats(%{assigns: %{site: site}} = conn, _params) do
     site = Plausible.Repo.preload(site, :owners)

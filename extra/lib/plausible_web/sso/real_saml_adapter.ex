@@ -105,7 +105,13 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
       |> Plausible.Audit.Entry.include_change(identity)
       |> Plausible.Audit.Entry.persist!()
 
-      PlausibleWeb.UserAuth.log_in_user(conn, identity, cookie.return_to)
+      # SGC Model-B: derive the tenant scope from the Authentik groups carried in
+      # the assertion and stamp it on the (renewed) session. nil => unrestricted
+      # super-admin; a scope map pins the user to one eagledrive.live subdomain.
+      # Must run AFTER log_in_user, which renews the session.
+      conn
+      |> PlausibleWeb.UserAuth.log_in_user(identity, cookie.return_to)
+      |> put_sgc_scope(assertion)
     else
       {:error, :not_found} ->
         login_error(conn, cookie, "Wrong email")
@@ -128,6 +134,17 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
     case X509.Certificate.from_pem(cert) do
       {:ok, cert} -> {:ok, cert}
       {:error, _} -> {:error, :malformed_certificate}
+    end
+  end
+
+  # SGC Model-B: read the multi-valued `groups` SAML attribute and store the
+  # resolved tenant scope on the session. Unrestricted (nil) users get no key.
+  defp put_sgc_scope(conn, assertion) do
+    groups = assertion.attributes |> Map.get("groups", []) |> List.wrap()
+
+    case Plausible.Sgc.Scope.for_groups(groups) do
+      nil -> conn
+      scope -> Plug.Conn.put_session(conn, :sgc_scope, scope)
     end
   end
 

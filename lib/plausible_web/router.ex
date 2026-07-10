@@ -73,6 +73,9 @@ defmodule PlausibleWeb.Router do
     plug :fetch_session
     plug PlausibleWeb.AuthPlug
     plug PlausibleWeb.Plugs.AuthorizeSiteAccess
+    # SGC Model-B: restrict scoped SSO users to their site + inject the mandatory
+    # event:hostname filter. No-op for unscoped (super-admin) sessions.
+    plug PlausibleWeb.Plugs.SgcScope
     plug PlausibleWeb.Plugs.NoRobots
     plug PlausibleWeb.Plugs.InternalStatsApiVersion
   end
