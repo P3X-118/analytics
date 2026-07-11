@@ -216,22 +216,26 @@ defmodule PlausibleWeb.AuthController do
     |> redirect(to: Routes.auth_path(conn, :login_form))
   end
 
-  on_ee do
-    def login_form(conn, params) do
-      login_preference = LoginPreference.get(conn)
-      error = Phoenix.Flash.get(conn.assigns.flash, :login_error)
+  # SGC Authentik-first (replaces the upstream on_ee preference-cookie logic):
+  # every login defaults straight into the (single) Authentik SAML integration —
+  # with a live Authentik session the user bounces through invisibly. The
+  # password form stays reachable as break-glass via /login?prefer=manual
+  # (admin@sgc.ai), and always renders when a login error is flashed so failed
+  # attempts don't redirect-loop into Authentik.
+  def login_form(conn, params) do
+    error = Phoenix.Flash.get(conn.assigns.flash, :login_error)
 
-      case {login_preference, params["prefer"], error} do
-        {"sso", nil, nil} ->
-          redirect(conn, to: Routes.sso_path(conn, :login_form, return_to: params["return_to"]))
-
-        _ ->
-          render(conn, "login_form.html")
-      end
-    end
-  else
-    def login_form(conn, _params) do
-      render(conn, "login_form.html")
+    with {nil, nil} <- {params["prefer"], error},
+         %Plausible.Auth.SSO.Integration{} = integration <-
+           Plausible.Repo.one(Plausible.Auth.SSO.Integration) do
+      redirect(conn,
+        to:
+          Routes.sso_path(conn, :saml_signin, integration.identifier,
+            return_to: params["return_to"]
+          )
+      )
+    else
+      _ -> render(conn, "login_form.html")
     end
   end
 
