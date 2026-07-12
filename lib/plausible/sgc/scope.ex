@@ -38,14 +38,18 @@ defmodule Plausible.Sgc.Scope do
 
   @default_admin_groups ~w(webstats-admins eagledrive-admins)
 
+  # Customers get their DEDICATED subdomain sites (captured via dual-domain
+  # snippets alongside the unified eagledrive.live rollup, which stays
+  # admin-only). Hostname-restricted grants remain supported via SGC_SCOPE_MAP
+  # for any future shared-site case.
   @default_map %{
     "learningwell-admins" => %{
-      "site" => "eagledrive.live",
-      "hostname" => "thelearningwell.eagledrive.live"
+      "site" => "thelearningwell.eagledrive.live",
+      "hostname" => nil
     },
     "tmw-admins" => %{
-      "site" => "eagledrive.live",
-      "hostname" => "texasmodern-signup.eagledrive.live"
+      "site" => "texasmodern-signup.eagledrive.live",
+      "hostname" => nil
     }
   }
 
