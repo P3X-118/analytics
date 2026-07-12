@@ -11,20 +11,19 @@ defmodule Plausible.Auth.User do
 
   @required [:email, :name, :password]
 
-  on_ee do
-    @derive {Plausible.Audit.Encoder,
-             only: [
-               :id,
-               :email,
-               :name,
-               :email_verified,
-               :previous_email,
-               :totp_enabled,
-               :last_team_identifier,
-               :sso_integration,
-               :sso_domain
-             ]}
-  end
+  # SGC: un-gated from on_ee — Audit + SSO are compiled into the CE build.
+  @derive {Plausible.Audit.Encoder,
+           only: [
+             :id,
+             :email,
+             :name,
+             :email_verified,
+             :previous_email,
+             :totp_enabled,
+             :last_team_identifier,
+             :sso_integration,
+             :sso_domain
+           ]}
 
   schema "users" do
     field :email, :string
@@ -51,15 +50,15 @@ defmodule Plausible.Auth.User do
     # for context perseverance across sessions
     field :last_team_identifier, Ecto.UUID
 
-    on_ee do
-      # Fields for SSO
-      field :type, Ecto.Enum, values: [:standard, :sso]
-      field :sso_identity_id, :string
-      field :last_sso_login, :naive_datetime
+    # SGC: un-gated from on_ee — SSO is compiled into the CE build and the
+    # columns exist via 20260709000001_sgc_sso_tables.
+    # Fields for SSO
+    field :type, Ecto.Enum, values: [:standard, :sso]
+    field :sso_identity_id, :string
+    field :last_sso_login, :naive_datetime
 
-      belongs_to :sso_integration, Plausible.Auth.SSO.Integration, on_replace: :nilify
-      belongs_to :sso_domain, Plausible.Auth.SSO.Domain, on_replace: :nilify
-    end
+    belongs_to :sso_integration, Plausible.Auth.SSO.Integration, on_replace: :nilify
+    belongs_to :sso_domain, Plausible.Auth.SSO.Domain, on_replace: :nilify
 
     has_many :sessions, Plausible.Auth.UserSession
     has_many :team_memberships, Plausible.Teams.Membership

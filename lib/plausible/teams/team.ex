@@ -21,22 +21,21 @@ defmodule Plausible.Teams.Team do
   @trial_accept_traffic_until_offset_days 14
   @subscription_accept_traffic_until_offset_days 30
 
-  on_ee do
-    @derive {Plausible.Audit.Encoder,
-             only: [
-               :id,
-               :identifier,
-               :name,
-               :trial_expiry_date,
-               :accept_traffic_until,
-               :allow_next_upgrade_override,
-               :locked,
-               :setup_complete,
-               :setup_at,
-               :hourly_api_request_limit,
-               :policy
-             ]}
-  end
+  # SGC: un-gated from on_ee — Audit is compiled into the CE build.
+  @derive {Plausible.Audit.Encoder,
+           only: [
+             :id,
+             :identifier,
+             :name,
+             :trial_expiry_date,
+             :accept_traffic_until,
+             :allow_next_upgrade_override,
+             :locked,
+             :setup_complete,
+             :setup_at,
+             :hourly_api_request_limit,
+             :policy
+           ]}
 
   schema "teams" do
     field :identifier, Ecto.UUID
@@ -66,9 +65,8 @@ defmodule Plausible.Teams.Team do
     has_one :subscription, Plausible.Billing.Subscription
     has_one :enterprise_plan, Plausible.Billing.EnterprisePlan
 
-    on_ee do
-      has_one :sso_integration, Plausible.Auth.SSO.Integration
-    end
+    # SGC: un-gated from on_ee — SSO is compiled into the CE build.
+    has_one :sso_integration, Plausible.Auth.SSO.Integration
 
     has_many :ownerships, Plausible.Teams.Membership,
       where: [role: :owner],

@@ -12,11 +12,8 @@ defmodule PlausibleWeb.UserAuth do
 
   require Logger
 
-  on_ee do
-    @type login_subject() :: Auth.User.t() | Auth.SSO.Identity.t()
-  else
-    @type login_subject() :: Auth.User.t()
-  end
+  # SGC: un-gated from on_ee — SSO identities log in on the CE build.
+  @type login_subject() :: Auth.User.t() | Auth.SSO.Identity.t()
 
   @spec log_in_user(Plug.Conn.t(), login_subject(), String.t() | nil) ::
           Plug.Conn.t()
@@ -33,49 +30,46 @@ defmodule PlausibleWeb.UserAuth do
     |> Phoenix.Controller.redirect(to: redirect_to)
   end
 
-  on_ee do
-    def log_in_user(conn, %Auth.SSO.Identity{} = identity, redirect_path) do
-      case Auth.SSO.provision_user(identity) do
-        {:ok, _provisioning_from, team, user} ->
-          redirect_to = login_redirect_path(conn, redirect_path)
-          device_name = get_device_name(conn)
-          session = Auth.UserSessions.create!(user, device_name, timeout_at: identity.expires_at)
+  # SGC: un-gated from on_ee — the SAML adapter passes an SSO.Identity here.
+  def log_in_user(conn, %Auth.SSO.Identity{} = identity, redirect_path) do
+    case Auth.SSO.provision_user(identity) do
+      {:ok, _provisioning_from, team, user} ->
+        redirect_to = login_redirect_path(conn, redirect_path)
+        device_name = get_device_name(conn)
+        session = Auth.UserSessions.create!(user, device_name, timeout_at: identity.expires_at)
 
-          conn
-          |> set_user_token(session.token)
-          |> Plug.Conn.put_session("current_team_id", team.identifier)
-          |> PlausibleWeb.LoginPreference.set_sso()
-          |> set_logged_in_cookie()
-          |> Phoenix.Controller.redirect(to: redirect_to)
+        conn
+        |> set_user_token(session.token)
+        |> Plug.Conn.put_session("current_team_id", team.identifier)
+        |> PlausibleWeb.LoginPreference.set_sso()
+        |> set_logged_in_cookie()
+        |> Phoenix.Controller.redirect(to: redirect_to)
 
-        {:error, :integration_not_found} ->
-          conn
-          |> log_out_user()
-          |> Phoenix.Controller.put_flash(:login_error, "Wrong email.")
-          |> Phoenix.Controller.redirect(
-            to: Routes.sso_path(conn, :login_form, return_to: redirect_path)
-          )
+      {:error, :integration_not_found} ->
+        conn
+        |> log_out_user()
+        |> Phoenix.Controller.put_flash(:login_error, "Wrong email.")
+        |> Phoenix.Controller.redirect(
+          to: Routes.sso_path(conn, :login_form, return_to: redirect_path)
+        )
 
-        {:error, :over_limit} ->
-          error = "Team can't accept more members. Please contact the owner."
+      {:error, :over_limit} ->
+        error = "Team can't accept more members. Please contact the owner."
 
-          conn
-          |> log_out_user()
-          |> Phoenix.Controller.put_flash(:login_error, error)
-          |> Phoenix.Controller.redirect(
-            to: Routes.sso_path(conn, :login_form, return_to: redirect_path)
-          )
+        conn
+        |> log_out_user()
+        |> Phoenix.Controller.put_flash(:login_error, error)
+        |> Phoenix.Controller.redirect(
+          to: Routes.sso_path(conn, :login_form, return_to: redirect_path)
+        )
 
-        {:error, reason, _team, _user}
-        when reason in [:multiple_memberships, :active_personal_team] ->
-          issue = to_string(reason) <> "_noforce"
+      {:error, reason, _team, _user}
+      when reason in [:multiple_memberships, :active_personal_team] ->
+        issue = to_string(reason) <> "_noforce"
 
-          conn
-          |> log_out_user()
-          |> Phoenix.Controller.redirect(
-            to: Routes.sso_path(conn, :provision_issue, issue: issue)
-          )
-      end
+        conn
+        |> log_out_user()
+        |> Phoenix.Controller.redirect(to: Routes.sso_path(conn, :provision_issue, issue: issue))
     end
   end
 

@@ -129,19 +129,17 @@ defmodule Plausible.Auth do
 
   @spec lookup(String.t()) :: {:ok, Auth.User.t()} | {:error, :user_not_found}
   def lookup(email) do
+    # SGC: un-gated from on_ee — SSO users exist on the CE build, so the
+    # SSO-aware lookup semantics apply.
     query =
-      on_ee do
-        from(
-          u in Auth.User,
-          left_join: tm in assoc(u, :team_memberships),
-          on: u.type == :sso and tm.role == :owner,
-          left_join: t in assoc(tm, :team),
-          where: u.email == ^email,
-          where: u.type == :standard or (u.type == :sso and t.setup_complete == true)
-        )
-      else
-        from(u in Auth.User, where: u.email == ^email)
-      end
+      from(
+        u in Auth.User,
+        left_join: tm in assoc(u, :team_memberships),
+        on: u.type == :sso and tm.role == :owner,
+        left_join: t in assoc(tm, :team),
+        where: u.email == ^email,
+        where: u.type == :standard or (u.type == :sso and t.setup_complete == true)
+      )
 
     case Repo.one(query) do
       %Auth.User{} = user -> {:ok, user}

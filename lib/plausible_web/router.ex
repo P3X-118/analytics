@@ -11,25 +11,24 @@ defmodule PlausibleWeb.Router do
     plug PlausibleWeb.Plugs.NoRobots
     on_ee(do: nil, else: plug(PlausibleWeb.FirstLaunchPlug, redirect_to: "/register"))
     plug PlausibleWeb.AuthPlug
-    on_ee(do: plug(Plausible.Plugs.HandleExpiredSession))
-    on_ee(do: plug(Plausible.Plugs.SSOTeamAccess))
+    # SGC: un-gated from on_ee — SSO session expiry + force-SSO run on CE.
+    plug Plausible.Plugs.HandleExpiredSession
+    plug Plausible.Plugs.SSOTeamAccess
     plug PlausibleWeb.Plugs.UserSessionTouch
     plug :put_root_layout, html: {PlausibleWeb.LayoutView, :app}
   end
 
-  on_ee do
-    pipeline :browser_sso_notice do
-      plug :accepts, ["html"]
-      plug :fetch_session
-      plug :fetch_live_flash
-      plug :put_secure_browser_headers
-      plug PlausibleWeb.Plugs.NoRobots
-      on_ee(do: nil, else: plug(PlausibleWeb.FirstLaunchPlug, redirect_to: "/register"))
-      plug PlausibleWeb.AuthPlug
-      on_ee(do: plug(Plausible.Plugs.HandleExpiredSession))
-      plug PlausibleWeb.Plugs.UserSessionTouch
-      plug :put_root_layout, html: {PlausibleWeb.LayoutView, :app}
-    end
+  # SGC: un-gated from on_ee — serves the SSO provision notice/issue pages on CE.
+  pipeline :browser_sso_notice do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_secure_browser_headers
+    plug PlausibleWeb.Plugs.NoRobots
+    plug PlausibleWeb.AuthPlug
+    plug Plausible.Plugs.HandleExpiredSession
+    plug PlausibleWeb.Plugs.UserSessionTouch
+    plug :put_root_layout, html: {PlausibleWeb.LayoutView, :app}
   end
 
   pipeline :shared_link do
@@ -185,39 +184,40 @@ defmodule PlausibleWeb.Router do
 
   # SSO routes (SGC: un-gated from on_ee so SAML SSO is active in the CE build)
   pipeline :sso_saml do
-      plug :accepts, ["html"]
+    plug :accepts, ["html"]
 
-      plug PlausibleWeb.Plugs.SecureSSO
+    plug PlausibleWeb.Plugs.SecureSSO
 
-      plug PlausibleWeb.Plugs.NoRobots
+    plug PlausibleWeb.Plugs.NoRobots
 
-      plug :fetch_session
-      plug :fetch_live_flash
+    plug :fetch_session
+    plug :fetch_live_flash
+  end
+
+  pipeline :sso_saml_auth do
+    plug :protect_from_forgery, with: :clear_session
+  end
+
+  scope "/sso", PlausibleWeb do
+    pipe_through [:browser, :csrf]
+
+    get "/login", SSOController, :login_form
+    post "/login", SSOController, :login
+  end
+
+  scope "/sso/saml", PlausibleWeb do
+    pipe_through [:sso_saml]
+
+    scope [] do
+      pipe_through :sso_saml_auth
+
+      get "/signin/:integration_id", SSOController, :saml_signin
     end
 
-    pipeline :sso_saml_auth do
-      plug :protect_from_forgery, with: :clear_session
-    end
+    post "/consume/:integration_id", SSOController, :saml_consume
+    post "/csp-report", SSOController, :csp_report
+  end
 
-    scope "/sso", PlausibleWeb do
-      pipe_through [:browser, :csrf]
-
-      get "/login", SSOController, :login_form
-      post "/login", SSOController, :login
-    end
-
-    scope "/sso/saml", PlausibleWeb do
-      pipe_through [:sso_saml]
-
-      scope [] do
-        pipe_through :sso_saml_auth
-
-        get "/signin/:integration_id", SSOController, :saml_signin
-      end
-
-      post "/consume/:integration_id", SSOController, :saml_consume
-      post "/csp-report", SSOController, :csp_report
-    end
   # /SSO routes (SGC un-gate)
 
   scope path: "/api/plugins", as: :plugins_api do
@@ -519,12 +519,19 @@ defmodule PlausibleWeb.Router do
     delete "/team/delete", SettingsController, :delete_team
   end
 
+  # SGC: provision notice/issue un-gated for CE (referenced by SSO login error
+  # paths); /logout stays EE-only — CE has its own logout route below.
+  scope "/", PlausibleWeb do
+    pipe_through [:browser_sso_notice, :csrf]
+
+    get "/sso/notice", SSOController, :provision_notice
+    get "/sso/issue", SSOController, :provision_issue
+  end
+
   on_ee do
     scope "/", PlausibleWeb do
       pipe_through [:browser_sso_notice, :csrf]
 
-      get "/sso/notice", SSOController, :provision_notice
-      get "/sso/issue", SSOController, :provision_issue
       get "/logout", AuthController, :logout
     end
 

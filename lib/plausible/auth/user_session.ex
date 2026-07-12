@@ -46,20 +46,16 @@ defmodule Plausible.Auth.UserSession do
   def touch_session(session, now \\ NaiveDateTime.utc_now(:second)) do
     changeset = change(session)
 
-    on_ee do
-      case get_field(changeset, :user) do
-        %{type: :sso} ->
-          put_change(changeset, :last_used_at, now)
+    # SGC: un-gated from on_ee — SSO sessions must NOT have their Authentik
+    # timeout extended by activity; only standard sessions slide.
+    case get_field(changeset, :user) do
+      %{type: :sso} ->
+        put_change(changeset, :last_used_at, now)
 
-        _ ->
-          changeset
-          |> put_change(:last_used_at, now)
-          |> put_change(:timeout_at, NaiveDateTime.shift(now, @timeout))
-      end
-    else
-      changeset
-      |> put_change(:last_used_at, now)
-      |> put_change(:timeout_at, NaiveDateTime.shift(now, @timeout))
+      _ ->
+        changeset
+        |> put_change(:last_used_at, now)
+        |> put_change(:timeout_at, NaiveDateTime.shift(now, @timeout))
     end
   end
 

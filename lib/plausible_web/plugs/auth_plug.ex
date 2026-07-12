@@ -64,12 +64,11 @@ defmodule PlausibleWeb.AuthPlug do
 
         Sentry.Context.set_user_context(%{id: user.id, name: user.name, email: user.email})
 
-        on_ee do
-          Plausible.Audit.set_context(%{
-            current_user: user,
-            current_team: current_team
-          })
-        end
+        # SGC: un-gated from on_ee — Audit is compiled into the CE build.
+        Plausible.Audit.set_context(%{
+          current_user: user,
+          current_team: current_team
+        })
 
         conn
         |> assign(:current_user, user)
