@@ -1,23 +1,25 @@
 defmodule PlausibleWeb.Plugs.SgcScope do
   @moduledoc """
-  Enforces the SGC Model-B multi-tenant isolation boundary for scoped SSO users.
+  Enforces the SGC data boundary for scoped (non-admin) SSO users.
 
-  A *scoped* user's session carries `:sgc_scope` — `%{"site" => site_domain,
-  "hostname" => allowed_hostname}` — stamped at SAML login from their Authentik
-  groups (see `Plausible.Sgc.Scope` and `PlausibleWeb.SSO.RealSAMLAdapter`).
-  Super-admins have no `:sgc_scope` on the session and pass through untouched.
+  A scoped user's session carries `:sgc_scope` — `%{"grants" => [%{"site" =>
+  domain, "hostname" => hostname-or-nil}]}` — stamped at SAML login from their
+  Authentik groups (see `Plausible.Sgc.Scope` / `PlausibleWeb.SSO.RealSAMLAdapter`).
+  Admins have no `:sgc_scope` on the session and pass through untouched.
 
   Two enforcement modes (select via `mode:` opt; default runs both):
 
-    * `:site_access` — 404s any request whose resolved site (`conn.assigns.site`,
-      set by `AuthorizeSiteAccess`) is not the scope's `site`. Wired onto the
-      dashboard page controller and the internal stats API.
+    * `:site_access` — 404s any request whose resolved site
+      (`conn.assigns.site`, set by `AuthorizeSiteAccess`) is not covered by a
+      grant. Guest memberships (synced by `Plausible.Sgc.Provision`) already
+      restrict this natively; the plug is defense in depth.
 
-    * `:stats_filter` — AND-injects `["is", "event:hostname", [hostname]]` into
-      `conn.params["filters"]` on the internal stats API. Because top-level filters
-      are implicitly ANDed, this constrains every query (and every breakdown) to
-      the user's own subdomain no matter what filters the client sends — it cannot
-      be widened or removed.
+    * `:stats_filter` — when every grant for the site is hostname-restricted
+      (Model-B: customers of `eagledrive.live` subdomains), AND-injects
+      `["is", "event:hostname", [hostnames...]]` into `conn.params["filters"]`
+      on the internal stats API. Top-level filters are implicitly ANDed, so no
+      client-sent filter can widen past the user's own hostnames. A grant with
+      `hostname: nil` covers the whole site — no filter injected.
 
   Compiled from `lib/` so it exists in the CE image.
   """
@@ -27,18 +29,20 @@ defmodule PlausibleWeb.Plugs.SgcScope do
   import Plug.Conn
   import Phoenix.Controller, only: [get_format: 1]
 
+  alias Plausible.Sgc.Scope
+
   @impl true
   def init(opts), do: opts
 
   @impl true
   def call(conn, opts) do
     case get_session(conn, :sgc_scope) do
-      %{"site" => _, "hostname" => _} = scope ->
+      %{"grants" => grants} when is_list(grants) ->
         opts
         |> Keyword.get(:mode, [:site_access, :stats_filter])
         |> List.wrap()
         |> Enum.reduce_while(conn, fn mode, conn ->
-          case enforce(conn, scope, mode) do
+          case enforce(conn, grants, mode) do
             %Plug.Conn{halted: true} = halted -> {:halt, halted}
             conn -> {:cont, conn}
           end
@@ -49,15 +53,29 @@ defmodule PlausibleWeb.Plugs.SgcScope do
     end
   end
 
-  defp enforce(conn, %{"site" => allowed_site}, :site_access) do
+  defp enforce(conn, grants, :site_access) do
     case conn.assigns[:site] do
-      %{domain: domain} when domain != allowed_site -> deny(conn)
+      %{domain: domain} ->
+        if domain in Scope.granted_sites(grants), do: conn, else: deny(conn)
+
+      _ ->
+        conn
+    end
+  end
+
+  defp enforce(conn, grants, :stats_filter) do
+    with %{domain: domain} <- conn.assigns[:site],
+         hostnames when is_list(hostnames) <- Scope.hostnames_for(domain, grants) do
+      inject_hostname_filter(conn, hostnames)
+    else
+      # :unrestricted (whole-site grant) or no site resolved
       _ -> conn
     end
   end
 
-  defp enforce(conn, %{"hostname" => hostname}, :stats_filter) do
-    mandatory = ["is", "event:hostname", [hostname]]
+  defp inject_hostname_filter(conn, hostnames) do
+    # An empty hostname list matches nothing — fail closed.
+    mandatory = ["is", "event:hostname", hostnames]
 
     {existing, reencode?} =
       case conn.params["filters"] do

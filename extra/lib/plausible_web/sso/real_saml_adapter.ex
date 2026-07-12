@@ -105,13 +105,14 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
       |> Plausible.Audit.Entry.include_change(identity)
       |> Plausible.Audit.Entry.persist!()
 
-      # SGC Model-B: derive the tenant scope from the Authentik groups carried in
-      # the assertion and stamp it on the (renewed) session. nil => unrestricted
-      # super-admin; a scope map pins the user to one eagledrive.live subdomain.
-      # Must run AFTER log_in_user, which renews the session.
+      # SGC: after a successful login, resolve the Authentik groups carried in
+      # the assertion into Plausible access — stamp the data-boundary scope on
+      # the (renewed) session and reconcile team/guest memberships. Admins get
+      # no scope key (unrestricted). Must run AFTER log_in_user, which renews
+      # the session.
       conn
       |> PlausibleWeb.UserAuth.log_in_user(identity, cookie.return_to)
-      |> put_sgc_scope(assertion)
+      |> apply_sgc_access(integration, identity, assertion)
     else
       {:error, :not_found} ->
         login_error(conn, cookie, "Wrong email")
@@ -137,14 +138,25 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
     end
   end
 
-  # SGC Model-B: read the multi-valued `groups` SAML attribute and store the
-  # resolved tenant scope on the session. Unrestricted (nil) users get no key.
-  defp put_sgc_scope(conn, assertion) do
-    groups = assertion.attributes |> Map.get("groups", []) |> List.wrap()
+  # SGC: read the multi-valued `groups` SAML attribute, sync the user's
+  # team/guest memberships (Authentik is the source of truth) and store the
+  # data-boundary grants on the session. Admins get no session key. Skipped
+  # entirely when the login did not succeed (no session token).
+  defp apply_sgc_access(conn, integration, identity, assertion) do
+    if Plug.Conn.get_session(conn, :user_token) do
+      groups = assertion.attributes |> Map.get("groups", []) |> List.wrap()
+      resolution = Plausible.Sgc.Scope.for_groups(groups)
 
-    case Plausible.Sgc.Scope.for_groups(groups) do
-      nil -> conn
-      scope -> Plug.Conn.put_session(conn, :sgc_scope, scope)
+      if user = Plausible.Repo.get_by(Plausible.Auth.User, email: identity.email) do
+        Plausible.Sgc.Provision.sync(user, integration.team, resolution)
+      end
+
+      case resolution do
+        :admin -> conn
+        {:grants, grants} -> Plug.Conn.put_session(conn, :sgc_scope, %{"grants" => grants})
+      end
+    else
+      conn
     end
   end
 
