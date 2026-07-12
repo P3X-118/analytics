@@ -20,9 +20,13 @@ defmodule Plausible.Plugs.SSOTeamAccess do
     current_user = conn.assigns[:current_user]
     current_team = conn.assigns[:current_team]
 
+    # SGC: owners are exempt (upstream walls standard owners to the provision
+    # notice too, which would kill the break-glass admin@sgc.ai password path —
+    # `all_but_owners` should mean what it says).
     eligible_for_check? =
       not is_nil(current_user) and
         not is_nil(current_team) and
+        conn.assigns[:current_team_role] != :owner and
         current_team.policy.force_sso == :all_but_owners and
         Plausible.Users.type(current_user) == :standard
 

@@ -314,25 +314,12 @@ defmodule Plausible.Auth.SSO do
     end
   end
 
-  defp check_owners_2fa_enabled(team) do
-    disabled_2fa_count =
-      Repo.aggregate(
-        from(
-          tm in Teams.Membership,
-          inner_join: u in assoc(tm, :user),
-          where: tm.team_id == ^team.id,
-          where: tm.role == :owner,
-          where: u.totp_enabled == false or is_nil(u.totp_secret)
-        ),
-        :count
-      )
-
-    if disabled_2fa_count == 0 do
-      :ok
-    else
-      {:error, :owner_2fa_disabled}
-    end
-  end
+  # SGC: the upstream owner-2FA requirement is waived. The only password-login
+  # owner is the break-glass admin@sgc.ai — reachable exclusively on the VPN
+  # mesh (Traefik ipAllowList) with an sgc_pgsk-derived password. Requiring
+  # interactive TOTP enrollment on a break-glass account would block enabling
+  # force-SSO without materially improving its threat model here.
+  defp check_owners_2fa_enabled(_team), do: :ok
 
   defp find_user(identity) do
     case find_user_with_fallback(identity) do
@@ -358,7 +345,7 @@ defmodule Plausible.Auth.SSO do
            sso_identity_id: identity.id,
            type: :sso
          ) do
-      with {:ok, sso_domain} <- SSO.Domains.lookup(identity.email),
+      with {:ok, sso_domain} <- lookup_domain(identity.email, integration),
            :ok <- check_domain_integration_match(sso_domain, integration) do
         user = Repo.preload(user, sso_integration: :team)
 
@@ -369,8 +356,30 @@ defmodule Plausible.Auth.SSO do
     end
   end
 
+  # SGC: emails whose domain is not a verified sso_domain attach to THIS
+  # integration's primary verified domain instead of being rejected. Authentik
+  # is the source of truth for who may log in (app policy bindings), and the
+  # assertion was signature-verified against exactly this integration, so the
+  # email-domain routing check adds nothing in our single-integration
+  # deployment — it only locks out users with external mailboxes
+  # (e.g. austin@icloud.com).
+  defp lookup_domain(email, integration) do
+    case SSO.Domains.lookup(email) do
+      {:ok, sso_domain} ->
+        {:ok, sso_domain}
+
+      {:error, :not_found} ->
+        integration = Repo.preload(integration, [:sso_domains, :team])
+
+        case Enum.find(integration.sso_domains, &(&1.status == :verified)) do
+          nil -> {:error, :not_found}
+          sso_domain -> {:ok, %{sso_domain | sso_integration: integration}}
+        end
+    end
+  end
+
   defp find_by_email(email, integration) do
-    with {:ok, sso_domain} <- SSO.Domains.lookup(email),
+    with {:ok, sso_domain} <- lookup_domain(email, integration),
          :ok <- check_domain_integration_match(sso_domain, integration) do
       case find_in_team_by_email(sso_domain.sso_integration.team, email) do
         {:ok, user} ->

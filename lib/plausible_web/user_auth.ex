@@ -31,16 +31,23 @@ defmodule PlausibleWeb.UserAuth do
   end
 
   # SGC: un-gated from on_ee — the SAML adapter passes an SSO.Identity here.
+  # Authentik-group access resolution happens HERE, before the redirect:
+  # Phoenix.Controller.redirect/2 sends the response, so any session write
+  # after it is silently lost.
   def log_in_user(conn, %Auth.SSO.Identity{} = identity, redirect_path) do
     case Auth.SSO.provision_user(identity) do
       {:ok, _provisioning_from, team, user} ->
-        redirect_to = login_redirect_path(conn, redirect_path)
+        resolution = Plausible.Sgc.Scope.for_groups(identity.groups)
+        Plausible.Sgc.Provision.sync(user, team, resolution)
+
+        redirect_to = sgc_redirect_path(conn, redirect_path, resolution)
         device_name = get_device_name(conn)
         session = Auth.UserSessions.create!(user, device_name, timeout_at: identity.expires_at)
 
         conn
         |> set_user_token(session.token)
         |> Plug.Conn.put_session("current_team_id", team.identifier)
+        |> put_sgc_scope(resolution)
         |> PlausibleWeb.LoginPreference.set_sso()
         |> set_logged_in_cookie()
         |> Phoenix.Controller.redirect(to: redirect_to)
@@ -134,6 +141,26 @@ defmodule PlausibleWeb.UserAuth do
       redirect_path
     else
       Routes.site_path(conn, :index)
+    end
+  end
+
+  # SGC: admins keep no scope key (unrestricted); granted users carry their
+  # grants on the session for PlausibleWeb.Plugs.SgcScope to enforce.
+  defp put_sgc_scope(conn, :admin), do: conn
+
+  defp put_sgc_scope(conn, {:grants, grants}),
+    do: Plug.Conn.put_session(conn, :sgc_scope, %{"grants" => grants})
+
+  # SGC: a user granted exactly one site lands straight on that site's
+  # dashboard (unless an explicit return_to was requested); everyone else gets
+  # the regular site picker.
+  defp sgc_redirect_path(conn, redirect_path, resolution) do
+    explicit? = String.starts_with?(redirect_path || "", "/")
+
+    case {explicit?, resolution} do
+      {true, _} -> redirect_path
+      {false, {:grants, [%{"site" => domain}]}} -> "/" <> URI.encode_www_form(domain)
+      _ -> Routes.site_path(conn, :index)
     end
   end
 

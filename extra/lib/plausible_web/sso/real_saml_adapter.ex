@@ -97,7 +97,10 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
           integration_id: integration.identifier,
           name: name_from_attributes(attributes),
           email: attributes.email,
-          expires_at: expires_at
+          expires_at: expires_at,
+          # SGC: Authentik group names; UserAuth.log_in_user resolves them into
+          # Plausible access (scope + membership sync) before redirecting.
+          groups: assertion.attributes |> Map.get("groups", []) |> List.wrap()
         }
 
       "sso_login_success"
@@ -105,14 +108,7 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
       |> Plausible.Audit.Entry.include_change(identity)
       |> Plausible.Audit.Entry.persist!()
 
-      # SGC: after a successful login, resolve the Authentik groups carried in
-      # the assertion into Plausible access — stamp the data-boundary scope on
-      # the (renewed) session and reconcile team/guest memberships. Admins get
-      # no scope key (unrestricted). Must run AFTER log_in_user, which renews
-      # the session.
-      conn
-      |> PlausibleWeb.UserAuth.log_in_user(identity, cookie.return_to)
-      |> apply_sgc_access(integration, identity, assertion)
+      PlausibleWeb.UserAuth.log_in_user(conn, identity, cookie.return_to)
     else
       {:error, :not_found} ->
         login_error(conn, cookie, "Wrong email")
@@ -135,28 +131,6 @@ defmodule PlausibleWeb.SSO.RealSAMLAdapter do
     case X509.Certificate.from_pem(cert) do
       {:ok, cert} -> {:ok, cert}
       {:error, _} -> {:error, :malformed_certificate}
-    end
-  end
-
-  # SGC: read the multi-valued `groups` SAML attribute, sync the user's
-  # team/guest memberships (Authentik is the source of truth) and store the
-  # data-boundary grants on the session. Admins get no session key. Skipped
-  # entirely when the login did not succeed (no session token).
-  defp apply_sgc_access(conn, integration, identity, assertion) do
-    if Plug.Conn.get_session(conn, :user_token) do
-      groups = assertion.attributes |> Map.get("groups", []) |> List.wrap()
-      resolution = Plausible.Sgc.Scope.for_groups(groups)
-
-      if user = Plausible.Repo.get_by(Plausible.Auth.User, email: identity.email) do
-        Plausible.Sgc.Provision.sync(user, integration.team, resolution)
-      end
-
-      case resolution do
-        :admin -> conn
-        {:grants, grants} -> Plug.Conn.put_session(conn, :sgc_scope, %{"grants" => grants})
-      end
-    else
-      conn
     end
   end
 
